@@ -1,22 +1,17 @@
 const express    = require("express");
 const session    = require("express-session");
 const cors       = require("cors");
-const fs         = require("fs");
-const path       = require("path");
 const { google } = require("googleapis");
 
 const app = express();
 
 // ─── CORS DINÂMICO ────────────────────────────────────────────────────────────
-// Em produção: ALLOWED_ORIGINS=https://frontend.com,https://outro.com
-// Em dev: permite localhost:3000 automaticamente
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map(o => o.trim())
   : ["http://localhost:3000"];
 
 app.use(cors({
   origin: (origin, cb) => {
-    // Permite requests sem origin (ex: Postman, mobile)
     if (!origin || ALLOWED_ORIGINS.includes(origin)) cb(null, true);
     else cb(new Error(`CORS bloqueado para origem: ${origin}`));
   },
@@ -24,58 +19,36 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(session({
-  secret: "segredo",
+  secret: process.env.SESSION_SECRET || "segredo",
   resave: true,
   saveUninitialized: false,
   cookie: { secure: false, sameSite: "lax" }
 }));
 
 // ─── CREDENCIAIS OAuth ────────────────────────────────────────────────────────
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-// REDIRECT_URI dinâmico — obrigatório atualizar no Google Cloud Console em produção
-const REDIRECT_URI = process.env.REDIRECT_URI || "http://localhost:3747/auth/callback";
+const REDIRECT_URI  = process.env.REDIRECT_URI || "http://localhost:3747/auth/callback";
 
-// ─── PERSISTÊNCIA EM DISCO ────────────────────────────────────────────────────
-const TOKENS_FILE = path.join(__dirname, "tokens.json");
-
-function loadTokensFromDisk() {
-  try {
-    if (fs.existsSync(TOKENS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(TOKENS_FILE, "utf8"));
-      console.log("[GCal] ✓ tokens.json carregado do disco");
-      return data;
-    }
-  } catch (e) {
-    console.warn("[GCal] ⚠ Erro ao ler tokens.json:", e.message);
-  }
-  console.log("[GCal] ℹ Nenhum tokens.json encontrado — aguardando login");
-  return { access_token: null, refresh_token: null, expiry_date: null };
-}
-
-function saveTokensToDisk(tokens) {
-  try {
-    fs.writeFileSync(TOKENS_FILE, JSON.stringify(tokens, null, 2), "utf8");
-    console.log("[GCal] ✓ tokens.json salvo no disco");
-  } catch (e) {
-    console.error("[GCal] ✗ Erro ao salvar tokens.json:", e.message);
-  }
-}
-
-const tokenStore = loadTokensFromDisk();
+// ─── TOKEN STORE EM MEMÓRIA ───────────────────────────────────────────────────
+// Sem arquivo — tokens vivem enquanto o processo estiver rodando.
+// Após restart do servidor será necessário autenticar via /auth novamente.
+const tokenStore = { access_token: null, refresh_token: null, expiry_date: null };
+console.log("[GCal] ℹ Token store iniciado em memória — acesse /auth para autenticar");
 
 // ─── INSTÂNCIA ÚNICA do OAuth2 ────────────────────────────────────────────────
 const oAuth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
 
+// Listener de renovação automática
 oAuth2Client.on("tokens", (tokens) => {
   console.log("[GCal] ♻ Token renovado automaticamente pelo listener");
   if (tokens.refresh_token) {
     tokenStore.refresh_token = tokens.refresh_token;
-    console.log("[GCal] ✓ Novo refresh_token salvo");
+    console.log("[GCal] ✔ Novo refresh_token salvo em memória");
   }
   tokenStore.access_token = tokens.access_token;
   tokenStore.expiry_date  = tokens.expiry_date || null;
-  saveTokensToDisk(tokenStore);
+  console.log("[GCal] ✔ Token atualizado em memória");
 });
 
 function applyTokens() {
@@ -86,9 +59,10 @@ function applyTokens() {
   });
 }
 
+// ─── HELPER — cliente autenticado com renovação automática ────────────────────
 async function getAuthClient() {
   if (!tokenStore.refresh_token) {
-    const err = new Error("Sem refresh_token — faça login com Google");
+    const err = new Error("Sem refresh_token — faça login via /auth");
     err.precisaRelogin = true;
     throw err;
   }
@@ -105,16 +79,14 @@ async function getAuthClient() {
       tokenStore.access_token = credentials.access_token;
       tokenStore.expiry_date  = credentials.expiry_date || null;
       if (credentials.refresh_token) tokenStore.refresh_token = credentials.refresh_token;
-      saveTokensToDisk(tokenStore);
       applyTokens();
-      console.log("[GCal] ✓ access_token renovado com sucesso");
+      console.log("[GCal] ✔ access_token renovado e salvo em memória");
     } catch (e) {
       console.error("[GCal] ✗ Falha ao renovar token:", e.message);
       tokenStore.access_token  = null;
       tokenStore.refresh_token = null;
       tokenStore.expiry_date   = null;
-      saveTokensToDisk(tokenStore);
-      const err = new Error("refresh_token inválido — faça login novamente");
+      const err = new Error("refresh_token inválido — faça login novamente via /auth");
       err.precisaRelogin = true;
       throw err;
     }
@@ -124,15 +96,14 @@ async function getAuthClient() {
 }
 
 // ─── LOGIN DO SISTEMA ─────────────────────────────────────────────────────────
-// Credenciais fixas de acesso ao sistema pericial
-const LOGIN_EMAIL = "rmcontabilizando@gmail.com";
-const LOGIN_SENHA = "sistema01";
+const LOGIN_EMAIL = process.env.LOGIN_EMAIL || "rmcontabilizando@gmail.com";
+const LOGIN_SENHA = process.env.LOGIN_SENHA || "sistema01";
 
 app.post("/login", (req, res) => {
   const { email, senha } = req.body;
   if (email === LOGIN_EMAIL && senha === LOGIN_SENHA) {
     req.session.user = { logado: true };
-    console.log("[Auth] ✓ Login realizado");
+    console.log("[Auth] ✔ Login realizado");
     return res.json({ ok: true });
   }
   console.warn("[Auth] ✗ Tentativa de login inválida");
@@ -147,7 +118,7 @@ app.get("/me", (req, res) => {
 // ─── LOGOUT DO SISTEMA ────────────────────────────────────────────────────────
 app.post("/logout", (req, res) => {
   req.session.destroy(() => {
-    console.log("[Auth] ✓ Sessão encerrada");
+    console.log("[Auth] ✔ Sessão encerrada");
     res.json({ ok: true });
   });
 });
@@ -157,8 +128,8 @@ app.get("/status", (req, res) => {
   const conectado = !!tokenStore.refresh_token;
   res.json({
     conectado,
-    logado:  conectado,
-    email:   req.session.email || (conectado ? "rmcontabilizando@gmail.com" : null),
+    logado: conectado,
+    email:  req.session.email || (conectado ? LOGIN_EMAIL : null),
   });
 });
 
@@ -178,21 +149,19 @@ app.get("/auth/callback", async (req, res) => {
 
     if (tokens.refresh_token) {
       tokenStore.refresh_token = tokens.refresh_token;
-      console.log("[GCal] ✓ Novo refresh_token recebido e salvo");
+      console.log("[GCal] ✔ Novo refresh_token salvo em memória");
     } else {
       console.warn("[GCal] ⚠ refresh_token NÃO retornado pelo Google");
-      console.warn("[GCal] ⚠ Usando refresh_token anterior:", tokenStore.refresh_token ? "existe" : "AUSENTE");
+      console.warn("[GCal] ⚠ refresh_token anterior:", tokenStore.refresh_token ? "existe" : "AUSENTE");
     }
 
     tokenStore.access_token = tokens.access_token;
     tokenStore.expiry_date  = tokens.expiry_date || null;
-    saveTokensToDisk(tokenStore);
     applyTokens();
 
     req.session.tokens = tokens;
-    req.session.email  = "rmcontabilizando@gmail.com";
-
-    console.log("[GCal] ✓ Login Google concluído — tokens salvos em disco");
+    req.session.email  = LOGIN_EMAIL;
+    console.log("[GCal] ✔ Usuário autenticado — tokens carregados em memória");
 
     req.session.save(() => {
       res.send(`
@@ -251,11 +220,11 @@ app.post("/criar-evento", async (req, res) => {
     let response;
     if (eventId) {
       response = await calendar.events.update({ calendarId: targetCal, eventId, requestBody: eventBody });
-      console.log("[GCal] ✓ EVENTO ATUALIZADO:", response.data.id);
+      console.log("[GCal] ✔ EVENTO ATUALIZADO:", response.data.id);
       return res.json({ ok: true, id: response.data.id, atualizado: true });
     } else {
       response = await calendar.events.insert({ calendarId: targetCal, requestBody: eventBody });
-      console.log("[GCal] ✓ EVENTO CRIADO:", response.data.id);
+      console.log("[GCal] ✔ EVENTO CRIADO:", response.data.id);
       return res.json({ ok: true, id: response.data.id, criado: true });
     }
 
@@ -299,9 +268,5 @@ app.get("/calendars", async (req, res) => {
 const PORT = process.env.PORT || 3747;
 app.listen(PORT, () => {
   console.log(`[GCal] Servidor rodando na porta ${PORT}`);
-  if (!tokenStore.refresh_token) {
-    console.warn("[GCal] ⚠ Nenhum token Google encontrado. Acesse /auth para conectar.");
-  } else {
-    console.log("[GCal] ✓ Token carregado — Google Calendar pronto");
-  }
+  console.log("[GCal] ℹ Tokens em memória — autentique via /auth após cada restart");
 });

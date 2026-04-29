@@ -115,10 +115,9 @@ const TelaLogin = ({ onLogin }) => {
     if (!email.trim() || !senha.trim()) { setErro("Preencha email e senha."); return; }
     setBusy(true); setErro("");
     try {
-      const r = await fetch("http://localhost:3747/login", {
+      const r = await fetch(`${API_URL}/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ email: email.trim(), senha }),
       });
       const d = await r.json();
@@ -619,15 +618,10 @@ export default function App() {
   const [perfil,  setPerfil]  = useState(null);
   // ───────────────────────────────────────────────────────────────────────────
 
-  // Verifica sessão existente ao carregar
-  useEffect(() => {
-    backendFetch("/me").then(r=>r.json())
-      .then(d => { if (d.logado) setLogado(true); })
-      .catch(() => {});
-  }, []);
+  // Sem sessão no backend — estado de login vive apenas no React
+  // Ao recarregar a página o usuário precisa logar novamente (comportamento esperado)
 
-  const handleLogout = useCallback(async () => {
-    try { await backendFetch("/logout", { method: "POST" }); } catch {}
+  const handleLogout = useCallback(() => {
     setLogado(false);
     setPerfil(null);
   }, []);

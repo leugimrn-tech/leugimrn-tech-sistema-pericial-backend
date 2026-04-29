@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, memo, useMemo } from "react";
 
 // ─── CONSTANTES GLOBAIS ───────────────────────────────────────────────────────
 // API_URL: em produção, defina REACT_APP_API_URL no .env ou painel do host
-const API_URL      = process.env.REACT_APP_API_URL || "http://localhost:3747";
+const API_URL      = process.env.REACT_APP_API_URL;
 const GCAL_BACKEND = API_URL;
 const LOCAL_KEY    = "pericial_v3";
 const API_BASE     = null;
@@ -115,7 +115,7 @@ const TelaLogin = ({ onLogin }) => {
     if (!email.trim() || !senha.trim()) { setErro("Preencha email e senha."); return; }
     setBusy(true); setErro("");
     try {
-      const r = await fetch("http://localhost:3747/login", {
+      const r = await fetch(`${API_URL}/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

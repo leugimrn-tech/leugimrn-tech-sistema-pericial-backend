@@ -31,10 +31,20 @@ const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const REDIRECT_URI  = process.env.REDIRECT_URI || "http://localhost:3747/auth/callback";
 
 // ─── TOKEN STORE EM MEMÓRIA ───────────────────────────────────────────────────
-// Sem arquivo — tokens vivem enquanto o processo estiver rodando.
-// Após restart do servidor será necessário autenticar via /auth novamente.
-const tokenStore = { access_token: null, refresh_token: null, expiry_date: null };
-console.log("[GCal] ℹ Token store iniciado em memória — acesse /auth para autenticar");
+// refresh_token pode ser pré-carregado via variável de ambiente GOOGLE_REFRESH_TOKEN.
+// Isso garante que após restarts no Render o token não se perde.
+// Para obter o valor: autentique via /auth uma vez localmente e copie o refresh_token dos logs.
+const tokenStore = {
+  access_token:  null,
+  refresh_token: process.env.GOOGLE_REFRESH_TOKEN || null,
+  expiry_date:   null,
+};
+
+if (tokenStore.refresh_token) {
+  console.log("[GCal] ✔ Token carregado em memória via variável de ambiente");
+} else {
+  console.log("[GCal] ℹ Nenhum token encontrado — acesse /auth para autenticar");
+}
 
 // ─── INSTÂNCIA ÚNICA do OAuth2 ────────────────────────────────────────────────
 const oAuth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);

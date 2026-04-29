@@ -18,11 +18,21 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+// Em produção (HTTPS cross-origin Vercel→Render) cookies precisam de
+// secure:true e sameSite:"none". Em dev local usa sameSite:"lax".
+const isProd = process.env.NODE_ENV === "production";
+app.set("trust proxy", 1); // necessário atrás do proxy do Render
+
 app.use(session({
   secret: process.env.SESSION_SECRET || "segredo",
   resave: true,
   saveUninitialized: false,
-  cookie: { secure: false, sameSite: "lax" }
+  cookie: {
+    secure:   isProd,          // true em produção (HTTPS obrigatório)
+    sameSite: isProd ? "none" : "lax", // "none" permite cross-origin
+    httpOnly: true,
+    maxAge:   24 * 60 * 60 * 1000,    // 24h
+  }
 }));
 
 // ─── CREDENCIAIS OAuth ────────────────────────────────────────────────────────
@@ -153,24 +163,43 @@ app.get("/auth", (req, res) => {
   res.redirect(url);
 });
 
+// Guard contra uso duplo do mesmo code OAuth
+const usedCodes = new Set();
+
 app.get("/auth/callback", async (req, res) => {
+  const code = req.query.code;
+
+  // Rejeita imediatamente se o code já foi processado
+  if (!code) {
+    return res.send(`<script>alert("Código OAuth ausente.");window.close();</script>`);
+  }
+  if (usedCodes.has(code)) {
+    console.warn("[GCal] ⚠ Code OAuth já utilizado — ignorando requisição duplicada");
+    return res.send(`
+      <h2 style="font-family:sans-serif;color:green">✓ Já autenticado!</h2>
+      <p style="font-family:sans-serif">Pode fechar esta janela.</p>
+      <script>setTimeout(()=>window.close(),1000);</script>
+    `);
+  }
+  usedCodes.add(code);
+  // Limpa codes antigos após 5 min para não acumular memória
+  setTimeout(() => usedCodes.delete(code), 5 * 60 * 1000);
+
   try {
-    const { tokens } = await oAuth2Client.getToken(req.query.code);
+    const { tokens } = await oAuth2Client.getToken(code);
 
     if (tokens.refresh_token) {
       tokenStore.refresh_token = tokens.refresh_token;
       console.log("[GCal] ✔ Novo refresh_token salvo em memória");
     } else {
-      console.warn("[GCal] ⚠ refresh_token NÃO retornado pelo Google");
-      console.warn("[GCal] ⚠ refresh_token anterior:", tokenStore.refresh_token ? "existe" : "AUSENTE");
+      console.warn("[GCal] ⚠ refresh_token NÃO retornado — usando anterior:", tokenStore.refresh_token ? "existe" : "AUSENTE");
     }
 
     tokenStore.access_token = tokens.access_token;
     tokenStore.expiry_date  = tokens.expiry_date || null;
     applyTokens();
 
-    req.session.tokens = tokens;
-    req.session.email  = LOGIN_EMAIL;
+    req.session.email = LOGIN_EMAIL;
     console.log("[GCal] ✔ Usuário autenticado — tokens carregados em memória");
 
     req.session.save(() => {
@@ -186,6 +215,8 @@ app.get("/auth/callback", async (req, res) => {
       `);
     });
   } catch (error) {
+    // Remove o code do set para permitir nova tentativa em caso de erro real
+    usedCodes.delete(code);
     console.error("[GCal] ✗ ERRO NO CALLBACK:", error.message);
     res.send(`<script>alert("Erro ao autenticar: ${error.message}");window.close();</script>`);
   }
@@ -271,6 +302,70 @@ app.get("/calendars", async (req, res) => {
   } catch (error) {
     console.error("[GCal] ✗ ERRO /calendars:", error.message);
     return res.status(500).json({ erro: "Falha ao listar calendários" });
+  }
+});
+
+// ─── DATAJUD — proxy para API pública do CNJ ─────────────────────────────────
+// Evita erro de CORS no frontend consultando diretamente do backend
+app.get("/datajud/:tribunal/:numero", async (req, res) => {
+  const { tribunal, numero } = req.params;
+
+  const ALIASES = {
+    TJRN:"tjrn", TJPB:"tjpb", TJMG:"tjmg", TJSP:"tjsp", TJPR:"tjpr",
+    TJAC:"tjac", TJAL:"tjal", TJAP:"tjap", TJAM:"tjam", TJBA:"tjba",
+    TJCE:"tjce", TJDFT:"tjdft", TJES:"tjes", TJGO:"tjgo", TJMA:"tjma",
+    TJMT:"tjmt", TJMS:"tjms", TJPA:"tjpa", TJPE:"tjpe", TJPI:"tjpi",
+    TJRJ:"tjrj", TJRS:"tjrs", TJRO:"tjro", TJRR:"tjrr", TJSC:"tjsc",
+    TJSE:"tjse", TJTO:"tjto", TRT21:"trt21", TRF5:"trf5",
+  };
+
+  const alias = ALIASES[tribunal?.toUpperCase()] || "tjrn";
+  const url   = `https://api-publica.datajud.cnj.jus.br/api_publica_${alias}/_search`;
+
+  try {
+    const response = await fetch(url, {
+      method:  "POST",
+      headers: {
+        "Content-Type":  "application/json",
+        "Authorization": "ApiKey cDZHYzlZa0JadVREZDJCendFbXNpMTc6iFUyOThiRWVSRW5WZlZGd2h3ZVdfdw==",
+      },
+      body: JSON.stringify({
+        query: { match: { numeroProcesso: numero } },
+      }),
+    });
+
+    if (!response.ok) {
+      const txt = await response.text();
+      console.error("[DataJud] Erro HTTP:", response.status, txt);
+      return res.status(response.status).json({ erro: "Erro na API do DataJud", detalhe: txt });
+    }
+
+    const data = await response.json();
+    const hit  = data?.hits?.hits?.[0]?._source;
+
+    if (!hit) {
+      return res.json({ encontrado: false });
+    }
+
+    const movs  = (hit.movimentos || []).sort((a,b) => new Date(b.dataHora) - new Date(a.dataHora));
+    const partes = hit.partes || [];
+    const autor  = partes.filter(p => p.polo === "AT").map(p => p.nome).join(", ");
+    const reu    = partes.filter(p => p.polo === "PA").map(p => p.nome).join(", ");
+
+    console.log(`[DataJud] ✔ Processo encontrado: ${numero}`);
+    return res.json({
+      encontrado:  true,
+      autor,
+      reu,
+      vara:        hit.orgaoJulgador?.nome || "",
+      ultima_mov:  movs[0] ? `${movs[0].nome} (${movs[0].dataHora?.slice(0,10)})` : "",
+      total_movs:  movs.length,
+      total_partes: partes.length,
+    });
+
+  } catch (e) {
+    console.error("[DataJud] ✗ Erro:", e.message);
+    return res.status(500).json({ erro: "Falha ao consultar DataJud", detalhe: e.message });
   }
 });
 

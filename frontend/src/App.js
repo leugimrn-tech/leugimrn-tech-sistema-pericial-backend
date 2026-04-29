@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, memo, useMemo } from "react";
 
 // ─── CONSTANTES GLOBAIS ───────────────────────────────────────────────────────
 // API_URL: em produção, defina REACT_APP_API_URL no .env ou painel do host
-const API_URL      = process.env.REACT_APP_API_URL;
+const API_URL      = process.env.REACT_APP_API_URL || "http://localhost:3747";
 const GCAL_BACKEND = API_URL;
 const LOCAL_KEY    = "pericial_v3";
 const API_BASE     = null;
@@ -115,7 +115,7 @@ const TelaLogin = ({ onLogin }) => {
     if (!email.trim() || !senha.trim()) { setErro("Preencha email e senha."); return; }
     setBusy(true); setErro("");
     try {
-      const r = await fetch(`${API_URL}/login`, {
+      const r = await fetch("http://localhost:3747/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -263,30 +263,47 @@ const GcalCalendarSelector = memo(({ value, onChange }) => {
 
 // ─── HOOKS ────────────────────────────────────────────────────────────────────
 const useDatajud = (onField) => {
-  const [busy,setBusy] = useState(false);
-  const [msg,setMsg]   = useState(null);
-  const buscar = useCallback(async (processo,tribunal) => {
+  const [busy, setBusy] = useState(false);
+  const [msg,  setMsg]  = useState(null);
+
+  const buscar = useCallback(async (processo, tribunal) => {
     if (!processo.trim()) return;
-    const cnj=parseCNJ(processo), trib=inferTrib(cnj)||tribunal, alias=TRIBUNAL_MAP[trib]?.alias||"tjrn";
-    setMsg({type:"warn",text:"Consultando DataJud…"}); setBusy(true);
+    const cnj  = parseCNJ(processo);
+    const trib = inferTrib(cnj) || tribunal;
+
+    setMsg({ type:"warn", text:"Consultando DataJud…" });
+    setBusy(true);
+
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,system:`Proxy: POST https://api-publica.datajud.cnj.jus.br/api_publica_${alias}/_search Authorization:"ApiKey cDZHYzlZa0JadVREZDJCendFbXNpMTc6iFUyOThiRWVSRW5WZlZGd2h3ZVdfdw==" body:{"query":{"match":{"numeroProcesso":"${processo.trim()}"}}}. Retorne SOMENTE o JSON.`,messages:[{role:"user",content:`Buscar ${processo.trim()}`}],tools:[{type:"web_search_20250305",name:"web_search"}]})});
-      const data=await res.json(), txt=(data?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join(""), m=txt.match(/\{[\s\S]*"hits"[\s\S]*\}/);
-      if (m) {
-        const hit=JSON.parse(m[0])?.hits?.hits?.[0]?._source;
-        if (hit) {
-          const movs=(hit.movimentos||[]).sort((a,b)=>new Date(b.dataHora)-new Date(a.dataHora)),partes=hit.partes||[],autor=partes.filter(p=>p.polo==="AT").map(p=>p.nome).join(", "),reu=partes.filter(p=>p.polo==="PA").map(p=>p.nome).join(", ");
-          if(trib) onField("tribunal",trib); if(hit.orgaoJulgador?.nome) onField("vara",hit.orgaoJulgador.nome);
-          if(autor) onField("autor",autor); if(reu) onField("reu",reu);
-          if(movs[0]) onField("ultima_mov",`${movs[0].nome} (${movs[0].dataHora?.slice(0,10)})`);
-          setMsg({type:"ok",text:`✓ ${movs.length} movimentações · ${partes.length} partes`}); setBusy(false); return;
-        }
+      const r = await backendFetch(`/datajud/${encodeURIComponent(trib)}/${encodeURIComponent(processo.trim())}`);
+      const d = await r.json();
+
+      if (!r.ok || d.erro) {
+        setMsg({ type:"warn", text: d.detalhe || "Erro ao acessar DataJud." });
+        setBusy(false); return;
       }
-      if(trib) onField("tribunal",trib);
-      setMsg({type:"warn",text:"Não encontrado. Preencha manualmente."});
-    } catch { setMsg({type:"warn",text:"Erro ao acessar DataJud."}); }
+
+      if (!d.encontrado) {
+        if (trib) onField("tribunal", trib);
+        setMsg({ type:"warn", text:"Processo não encontrado. Preencha manualmente." });
+        setBusy(false); return;
+      }
+
+      if (trib)       onField("tribunal",   trib);
+      if (d.vara)     onField("vara",        d.vara);
+      if (d.autor)    onField("autor",       d.autor);
+      if (d.reu)      onField("reu",         d.reu);
+      if (d.ultima_mov) onField("ultima_mov", d.ultima_mov);
+
+      setMsg({ type:"ok", text:`✓ ${d.total_movs} movimentações · ${d.total_partes} partes` });
+
+    } catch (e) {
+      setMsg({ type:"warn", text:"Erro ao conectar com o servidor." });
+    }
+
     setBusy(false);
-  },[onField]);
+  }, [onField]);
+
   return { busy, msg, setMsg, buscar };
 };
 

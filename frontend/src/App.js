@@ -550,10 +550,15 @@ const ModalForm = memo(({ form, onField, onSave, onDelete, onClose, saving, gcal
               <input
                 value={form.processo}
                 onChange={e => {
-                  const val = e.target.value;
-                  onField("processo", val);
-                  const trib = detectTribunalFromCNJ(val);
+                  const fmt  = formatarCNJ(e.target.value);
+                  onField("processo", fmt);
+                  const d    = fmt.replace(/\D/g, "");
+                  if (d.length !== 20) return;
+                  const trib = detectTribunalFromCNJ(fmt);
+                  const j    = d[13];
                   if (trib) { onField("tribunal", trib); onField("vara", ""); }
+                  // Preenche tipo baseado no segmento de justiça
+                  if (j === "5") onField("tipo", "Trabalhista");
                 }}
                 style={s.inp} placeholder="0000000-00.0000.8.20.0001"
               />

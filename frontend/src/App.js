@@ -82,14 +82,33 @@ const TR_MAP = {
   "26":"TJSP","27":"TJTO",
 };
 
+// Aplica máscara CNJ: NNNNNNN-DD.AAAA.J.TT.OOOO
+const formatarCNJ = (raw) => {
+  const d = raw.replace(/\D/g, "").slice(0, 20);
+  if (d.length <= 7)  return d;
+  if (d.length <= 9)  return `${d.slice(0,7)}-${d.slice(7)}`;
+  if (d.length <= 13) return `${d.slice(0,7)}-${d.slice(7,9)}.${d.slice(9)}`;
+  if (d.length <= 14) return `${d.slice(0,7)}-${d.slice(7,9)}.${d.slice(9,13)}.${d.slice(13)}`;
+  if (d.length <= 16) return `${d.slice(0,7)}-${d.slice(7,9)}.${d.slice(9,13)}.${d.slice(13,14)}.${d.slice(14)}`;
+  return `${d.slice(0,7)}-${d.slice(7,9)}.${d.slice(9,13)}.${d.slice(13,14)}.${d.slice(14,16)}.${d.slice(16)}`;
+};
+
+// Valida dígito verificador CNJ (módulo 97)
+const validarCNJ = (numero) => {
+  const d = numero.replace(/\D/g, "");
+  if (d.length !== 20) return false;
+  const num    = BigInt(`${d.slice(0,7)}${d.slice(9,13)}${d.slice(13,14)}${d.slice(14,16)}${d.slice(16,20)}`);
+  const r1     = Number(num % 97n);
+  const dvCalc = 98 - Number((BigInt(r1) * 100n) % 97n);
+  return parseInt(d.slice(7,9), 10) === dvCalc;
+};
+
 const detectTribunalFromCNJ = (numero) => {
-  const digits = numero.replace(/\D/g, "");
-  if (digits.length !== 20) return null;
-  // Formato CNJ: NNNNNNN-DD.AAAA.J.TT.OOOO
-  // digits:       0123456  78 9012 3 45 6789
-  const j  = digits[13];       // segmento de justiça
-  const tr = digits.slice(14, 16); // código do tribunal
-  if (j === "8") return TR_MAP[tr] || null;  // Justiça Estadual
+  const d = numero.replace(/\D/g, "");
+  if (d.length !== 20) return null;
+  const j  = d[13];
+  const tr = d.slice(14, 16);
+  if (j === "8") return TR_MAP[tr] || null;
   if (j === "5" && tr === "21") return "TRT21";
   if (j === "4" && tr === "05") return "TRF5";
   return null;
@@ -576,12 +595,32 @@ const ModalForm = memo(({ form, onField, onSave, onDelete, onClose, saving, gcal
                 );
               })()}
             </div>
-            {form.processo&&parseCNJ(form.processo)&&(()=>{ const cnj=parseCNJ(form.processo),trib=inferTrib(cnj); return (
-              <div style={{display:"flex",gap:7,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
-                <span style={{fontSize:10,background:"#0A2E1A",color:"#6EE7B7",border:"1px solid #064E2A",borderRadius:4,padding:"1px 7px"}}>CNJ válido · {cnj.ano} · {trib||"—"}</span>
-                <span style={{fontSize:10,color:"#4B5563"}}>Preencha os dados manualmente após consultar o portal</span>
-              </div>
-            );})()}
+            {form.processo&&(()=>{
+              const d = form.processo.replace(/\D/g,"");
+              if (d.length < 20) return null;
+              const valido  = validarCNJ(form.processo);
+              const trib    = detectTribunalFromCNJ(form.processo);
+              const j       = d[13];
+              const justica = j==="8"?"Estadual":j==="5"?"Trabalho":j==="4"?"Federal":"—";
+              const tm      = TRIBUNAL_MAP[trib];
+              return (
+                <div style={{display:"flex",gap:7,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
+                  <span style={{fontSize:10,padding:"1px 7px",borderRadius:4,
+                    background:valido?"#0A2E1A":"#3B1515",
+                    color:valido?"#6EE7B7":"#FCA5A5",
+                    border:`1px solid ${valido?"#064E2A":"#7F1D1D"}`}}>
+                    {valido?"✔ CNJ válido":"❌ CNJ inválido"} · {d.slice(9,13)} · {trib||"—"} · {justica}
+                  </span>
+                  {valido&&tm?.portal&&(
+                    <a href={tm.portal.replace("{NUM}",encodeURIComponent(form.processo))}
+                      target="_blank" rel="noreferrer"
+                      style={{fontSize:10,color:"#60A5FA",textDecoration:"none"}}>
+                      🔗 Portal ↗
+                    </a>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <div style={s.g2}>
             <div style={s.row}><label style={s.lbl}>Tribunal</label><select value={form.tribunal} onChange={e=>{onField("tribunal",e.target.value);onField("vara","");}} style={s.inp}>{TRIBUNAIS.map(o=><option key={o}>{o}</option>)}</select></div>

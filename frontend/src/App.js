@@ -72,7 +72,28 @@ const TRIBUNAL_MAP = {
   JFRN:  { portal:"https://pje1g.trf5.jus.br/pje/ConsultaPublica/listView.seam" },
 };
 
-// ─── MIGRAÇÃO DE COLUNA LEGADA ────────────────────────────────────────────────
+// ─── DETECÇÃO AUTOMÁTICA DE TRIBUNAL POR CNJ ─────────────────────────────────
+const TR_MAP = {
+  "01":"TJAC","02":"TJAL","03":"TJAP","04":"TJAM","05":"TJBA",
+  "06":"TJCE","07":"TJDFT","08":"TJES","09":"TJGO","10":"TJMA",
+  "11":"TJMT","12":"TJMS","13":"TJMG","14":"TJPA","15":"TJPB",
+  "16":"TJPR","17":"TJPE","18":"TJPI","19":"TJRJ","20":"TJRN",
+  "21":"TJRS","22":"TJRO","23":"TJRR","24":"TJSC","25":"TJSE",
+  "26":"TJSP","27":"TJTO",
+};
+
+const detectTribunalFromCNJ = (numero) => {
+  const digits = numero.replace(/\D/g, "");
+  if (digits.length !== 20) return null;
+  // Formato CNJ: NNNNNNN-DD.AAAA.J.TT.OOOO
+  // digits:       0123456  78 9012 3 45 6789
+  const j  = digits[13];       // segmento de justiça
+  const tr = digits.slice(14, 16); // código do tribunal
+  if (j === "8") return TR_MAP[tr] || null;  // Justiça Estadual
+  if (j === "5" && tr === "21") return "TRT21";
+  if (j === "4" && tr === "05") return "TRF5";
+  return null;
+};
 const migrateCol = col => col === "aguardando" ? "diligencia" : col;
 
 const EMPTY = {
@@ -526,7 +547,16 @@ const ModalForm = memo(({ form, onField, onSave, onDelete, onClose, saving, gcal
           <div style={s.row}>
             <label style={s.lbl}>Número CNJ</label>
             <div style={{display:"flex",gap:6}}>
-              <input value={form.processo} onChange={e=>onField("processo",e.target.value)} style={s.inp} placeholder="0000000-00.0000.8.20.0001"/>
+              <input
+                value={form.processo}
+                onChange={e => {
+                  const val = e.target.value;
+                  onField("processo", val);
+                  const trib = detectTribunalFromCNJ(val);
+                  if (trib) { onField("tribunal", trib); onField("vara", ""); }
+                }}
+                style={s.inp} placeholder="0000000-00.0000.8.20.0001"
+              />
               {form.processo&&parseCNJ(form.processo)&&(()=>{
                 const cnj=parseCNJ(form.processo), trib=inferTrib(cnj), tm=TRIBUNAL_MAP[trib];
                 if (!tm?.portal) return null;

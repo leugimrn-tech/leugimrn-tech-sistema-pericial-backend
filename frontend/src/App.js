@@ -40,11 +40,36 @@ const ETAPA_CORES = {
   "Finalizado":                        { bg:"#0A1F12", border:"#064E2A", badge:"#10B981" },
 };
 const TRIBUNAL_MAP = {
-  TJRN: { alias:"tjrn",  portal:"https://esaj.tjrn.jus.br/cpopg/search.do?cbPesquisa=NUMPROC&dadosConsulta.valorConsultaNuUnificado={NUM}" },
-  TJPB: { alias:"tjpb",  portal:"https://pje.tjpb.jus.br/pje/ConsultaPublica/listView.seam" },
-  TRT21:{ alias:"trt21", portal:"https://pje.trt21.jus.br/consultaprocessual/detalhe-processo/{NUM}" },
-  TRF5: { alias:"trf5",  portal:"https://pje1g.trf5.jus.br/pje/ConsultaPublica/listView.seam" },
-  JFRN: { alias:"jfrn",  portal:"https://pje1g.trf5.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJRN:  { portal:"https://pje1gconsulta.tjrn.jus.br/consultapublica/ConsultaPublica/listView.seam" },
+  TJPB:  { portal:"https://pje.tjpb.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJMG:  { portal:"https://pje.tjmg.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJSP:  { portal:"https://esaj.tjsp.jus.br/cpopg/search.do?cbPesquisa=NUMPROC&dadosConsulta.valorConsultaNuUnificado={NUM}" },
+  TJPR:  { portal:"https://projudi.tjpr.jus.br/projudi/" },
+  TJAC:  { portal:"https://pje.tjac.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJAL:  { portal:"https://pje.tjal.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJAP:  { portal:"https://pje.tjap.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJAM:  { portal:"https://pje.tjam.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJBA:  { portal:"https://pje.tjba.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJCE:  { portal:"https://pje.tjce.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJDFT: { portal:"https://pje.tjdft.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJES:  { portal:"https://pje.tjes.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJGO:  { portal:"https://pje.tjgo.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJMA:  { portal:"https://pje.tjma.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJMT:  { portal:"https://pje.tjmt.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJMS:  { portal:"https://pje.tjms.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJPA:  { portal:"https://pje.tjpa.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJPE:  { portal:"https://pje.tjpe.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJPI:  { portal:"https://pje.tjpi.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJRJ:  { portal:"https://pje.tjrj.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJRS:  { portal:"https://pje.tjrs.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJRO:  { portal:"https://pje.tjro.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJRR:  { portal:"https://pje.tjrr.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJSC:  { portal:"https://eprocwebcon.tjsc.jus.br/consulta2g/" },
+  TJSE:  { portal:"https://pje.tjse.jus.br/pje/ConsultaPublica/listView.seam" },
+  TJTO:  { portal:"https://pje.tjto.jus.br/pje/ConsultaPublica/listView.seam" },
+  TRT21: { portal:"https://pje.trt21.jus.br/consultaprocessual/detalhe-processo/{NUM}" },
+  TRF5:  { portal:"https://pje1g.trf5.jus.br/pje/ConsultaPublica/listView.seam" },
+  JFRN:  { portal:"https://pje1g.trf5.jus.br/pje/ConsultaPublica/listView.seam" },
 };
 
 // ─── MIGRAÇÃO DE COLUNA LEGADA ────────────────────────────────────────────────
@@ -502,17 +527,26 @@ const ModalForm = memo(({ form, onField, onSave, onDelete, onClose, saving, gcal
             <label style={s.lbl}>Número CNJ</label>
             <div style={{display:"flex",gap:6}}>
               <input value={form.processo} onChange={e=>onField("processo",e.target.value)} style={s.inp} placeholder="0000000-00.0000.8.20.0001"/>
-              <button onClick={()=>buscar(form.processo,form.tribunal)} disabled={djBusy||!form.processo.trim()} style={{...s.btn("#1E3A5F","#93C5FD","#1D4ED8"),whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}>
-                {djBusy?<><Spin/> Buscando…</>:<>⌕ DataJud</>}
-              </button>
+              {form.processo&&parseCNJ(form.processo)&&(()=>{
+                const cnj=parseCNJ(form.processo), trib=inferTrib(cnj), tm=TRIBUNAL_MAP[trib];
+                if (!tm?.portal) return null;
+                return (
+                  <a
+                    href={tm.portal.replace("{NUM}", encodeURIComponent(form.processo))}
+                    target="_blank" rel="noreferrer"
+                    style={{...s.btn("#1E3A5F","#93C5FD","#1D4ED8"), whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:4, textDecoration:"none", fontSize:11}}
+                  >
+                    🔗 Abrir portal
+                  </a>
+                );
+              })()}
             </div>
-            {form.processo&&parseCNJ(form.processo)&&(()=>{ const cnj=parseCNJ(form.processo),trib=inferTrib(cnj),tm=TRIBUNAL_MAP[trib]; return (
+            {form.processo&&parseCNJ(form.processo)&&(()=>{ const cnj=parseCNJ(form.processo),trib=inferTrib(cnj); return (
               <div style={{display:"flex",gap:7,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{fontSize:10,background:"#0A2E1A",color:"#6EE7B7",border:"1px solid #064E2A",borderRadius:4,padding:"1px 7px"}}>CNJ válido · {cnj.ano} · {trib||"—"}</span>
-                {tm?.portal&&<a href={tm.portal.replace("{NUM}",encodeURIComponent(form.processo))} target="_blank" rel="noreferrer" style={{fontSize:10,color:"#60A5FA"}}>Portal ↗</a>}
+                <span style={{fontSize:10,color:"#4B5563"}}>Preencha os dados manualmente após consultar o portal</span>
               </div>
             );})()}
-            <MsgBar m={djMsg} onClose={()=>setDjMsg(null)}/>
           </div>
           <div style={s.g2}>
             <div style={s.row}><label style={s.lbl}>Tribunal</label><select value={form.tribunal} onChange={e=>{onField("tribunal",e.target.value);onField("vara","");}} style={s.inp}>{TRIBUNAIS.map(o=><option key={o}>{o}</option>)}</select></div>

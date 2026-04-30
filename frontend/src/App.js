@@ -120,9 +120,11 @@ const formatarCNJ = (raw) => {
 const validarCNJ = (numero) => {
   const d = numero.replace(/\D/g, "");
   if (d.length !== 20) return false;
+  /* eslint-disable no-undef */
   const num    = BigInt(`${d.slice(0,7)}${d.slice(9,13)}${d.slice(13,14)}${d.slice(14,16)}${d.slice(16,20)}`);
   const r1     = Number(num % 97n);
   const dvCalc = 98 - Number((BigInt(r1) * 100n) % 97n);
+  /* eslint-enable no-undef */
   return parseInt(d.slice(7,9), 10) === dvCalc;
 };
 

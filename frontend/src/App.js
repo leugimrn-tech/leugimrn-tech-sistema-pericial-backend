@@ -8,8 +8,9 @@ const LOCAL_KEY    = "pericial_v3";
 const API_BASE     = null;
 
 const COLS = [
-  { id:"honorarios", label:"Proposta honorários",  color:"#D97706" },
+  { id:"honorarios", label:"Proposta honorários",   color:"#D97706" },
   { id:"diligencia", label:"Diligência documental", color:"#A855F7" },
+  { id:"aguardando", label:"Aguardando documentos", color:"#9CA3AF" },
   { id:"execucao",   label:"Em execução",           color:"#3B82F6" },
   { id:"impugnacao", label:"Responder impugnação",  color:"#EF4444" },
   { id:"entregue",   label:"Entregue / aguardando", color:"#10B981" },
@@ -20,7 +21,29 @@ const TRIBUNAIS = ["TJRN","TJPB","TJMG","TJSP","TJPR","TJAC","TJAL","TJAP","TJAM
   "TJES","TJGO","TJMA","TJMT","TJMS","TJPA","TJPE","TJPI","TJRJ","TJRS","TJRO","TJRR","TJSC",
   "TJSE","TJTO","TRT21","TRF5","JFRN","Outro"];
 const FASES      = ["Conhecimento","Instrução","Saneamento","Execução","Cumprimento de Sentença","Liquidação","Recursal","Outra"];
-const STATUS_LIST= ["Início dos trabalhos periciais","Efetuar laudo","Responder impugnação","Diligência","Aguardar documentos","Aguardando depósito de honorários","Finalizado"];
+const STATUS_LIST= ["Proposta de honorários","Diligência documental","Aguardando documentos","Efetuar laudo","Responder impugnação","Laudo entregue","Finalizado / recebido"];
+// ─── Mapa coluna do kanban ↔ status pericial (1:1) ────────────────────────────
+// As listas COLS e STATUS_LIST ficam sincronizadas: cada coluna tem exatamente
+// um status correspondente e vice-versa. Isso faz a vinculação bidirecional
+// (arrastar card ↔ trocar badge no formulário) ser sempre determinística.
+const COL_TO_STATUS = {
+  honorarios: "Proposta de honorários",
+  diligencia: "Diligência documental",
+  aguardando: "Aguardando documentos",
+  execucao:   "Efetuar laudo",
+  impugnacao: "Responder impugnação",
+  entregue:   "Laudo entregue",
+  finalizado: "Finalizado / recebido",
+};
+const STATUS_TO_COL = {
+  "Proposta de honorários": "honorarios",
+  "Diligência documental":  "diligencia",
+  "Aguardando documentos":  "aguardando",
+  "Efetuar laudo":          "execucao",
+  "Responder impugnação":   "impugnacao",
+  "Laudo entregue":         "entregue",
+  "Finalizado / recebido":  "finalizado",
+};
 const VARAS      = {
   TJRN: ["1ª Vara Cível","2ª Vara Cível","3ª Vara Cível","4ª Vara Cível","5ª Vara Cível","6ª Vara Cível","7ª Vara Cível","8ª Vara Cível","Vara da Fazenda Pública","Vara de Família","JEC Cível","Outro"],
   TJPB: ["1ª Vara Cível","2ª Vara Cível","Vara da Fazenda","JEC","Outro"],
@@ -31,13 +54,13 @@ const VARAS      = {
   Outro:["Vara Única","Outro"],
 };
 const ETAPA_CORES = {
-  "Responder impugnação":              { bg:"#2D1B00", border:"#92400E", badge:"#D97706" },
-  "Aguardando depósito de honorários": { bg:"#1A2A0A", border:"#3B6012", badge:"#65A30D" },
-  "Efetuar laudo":                     { bg:"#0D1F3C", border:"#1D4ED8", badge:"#3B82F6" },
-  "Início dos trabalhos periciais":    { bg:"#1F0D2A", border:"#7C3AED", badge:"#A78BFA" },
-  "Diligência":                        { bg:"#0D2020", border:"#0F766E", badge:"#2DD4BF" },
-  "Aguardar documentos":               { bg:"#1F1F1F", border:"#3F3F46", badge:"#9CA3AF" },
-  "Finalizado":                        { bg:"#0A1F12", border:"#064E2A", badge:"#10B981" },
+  "Proposta de honorários":  { bg:"#2D1B00", border:"#92400E", badge:"#D97706" },
+  "Diligência documental":   { bg:"#1F0D2A", border:"#7C3AED", badge:"#A855F7" },
+  "Aguardando documentos":   { bg:"#1F1F1F", border:"#3F3F46", badge:"#9CA3AF" },
+  "Efetuar laudo":           { bg:"#0D1F3C", border:"#1D4ED8", badge:"#3B82F6" },
+  "Responder impugnação":    { bg:"#2D0E0E", border:"#7F1D1D", badge:"#EF4444" },
+  "Laudo entregue":          { bg:"#0A1F12", border:"#064E2A", badge:"#10B981" },
+  "Finalizado / recebido":   { bg:"#062012", border:"#065F46", badge:"#059669" },
 };
 const TRIBUNAL_MAP = {
   TJRN:  { portal:"https://pje1gconsulta.tjrn.jus.br/consultapublica/ConsultaPublica/listView.seam" },
@@ -113,14 +136,33 @@ const detectTribunalFromCNJ = (numero) => {
   if (j === "4" && tr === "05") return "TRF5";
   return null;
 };
-const migrateCol = col => col === "aguardando" ? "diligencia" : col;
+// migrateCol: identidade. Antigamente "aguardando" virava "diligencia", mas agora
+// "aguardando" passou a ser uma coluna válida (Aguardando documentos), então só
+// repassa o valor. Cards salvos antes desta versão com col="aguardando" eram da
+// extinta coluna do mesmo id (já tinha sido migrada na época), então não há
+// conflito retroativo.
+const migrateCol = col => col || "honorarios";
+// migrateStatus: mapeia status antigos (versões anteriores do sistema) para os
+// novos labels unificados. Status atuais passam intactos.
+const STATUS_MIGRATION = {
+  "Início dos trabalhos periciais":    "Proposta de honorários",
+  "Aguardando depósito de honorários": "Proposta de honorários",
+  "Aguardar documentos":               "Aguardando documentos",
+  "Diligência":                        "Diligência documental",
+  "Finalizado":                        "Finalizado / recebido",
+};
+const migrateStatus = s => STATUS_MIGRATION[s] || s || "Proposta de honorários";
 
 const EMPTY = {
   id:null, col:"honorarios", owner:"",
   processo:"", tribunal:"TJRN", tipo:"PASEP", fase:"Conhecimento",
-  status_pericial:"Início dos trabalhos periciais",
+  status_pericial:"Proposta de honorários",
   autor:"", reu:"", vara:"", proximo:"", ultima_mov:"",
   prazo_fase:"", prazo_laudo:"",
+  // ─── NOVO: data_vencimento espelha prazo_laudo (retrocompat) ───────────────
+  data_vencimento:"",
+  // ─── NOVO: datas de etapa (preenchidas automaticamente, não sobrescrever) ──
+  data_proposta:"", data_inicio_execucao:"", data_conclusao_laudo:"",
   honorarios:"", pagamentos:[],
   obs:"", tasks:[],
   gcal_fase_id:"", gcal_laudo_id:"",
@@ -129,10 +171,10 @@ const EMPTY = {
 };
 
 // ─── STORAGE / API LAYER ──────────────────────────────────────────────────────
-const localRead  = () => { try { return JSON.parse(localStorage.getItem(LOCAL_KEY)||"[]").map(c=>({...c,col:migrateCol(c.col)})); } catch { return []; } };
+const localRead  = () => { try { return JSON.parse(localStorage.getItem(LOCAL_KEY)||"[]").map(migrateCard); } catch { return []; } };
 const localWrite = d  => { try { localStorage.setItem(LOCAL_KEY, JSON.stringify(d)); } catch {} };
 const apiLayer = {
-  getAll:   async ()    => { if (!API_BASE) return localRead(); return fetch(`${API_BASE}/processos`).then(r=>r.json()).then(d=>d.map(c=>({...c,col:migrateCol(c.col)}))); },
+  getAll:   async ()    => { if (!API_BASE) return localRead(); return fetch(`${API_BASE}/processos`).then(r=>r.json()).then(d=>d.map(migrateCard)); },
   create:   async (c)   => { if (!API_BASE) { const n={...c,id:Date.now()}; localWrite([...localRead(),n]); return n; } return fetch(`${API_BASE}/processos`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)}).then(r=>r.json()); },
   update:   async (c)   => { if (!API_BASE) { localWrite(localRead().map(x=>x.id===c.id?c:x)); return c; } return fetch(`${API_BASE}/processos/${c.id}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)}).then(r=>r.json()); },
   remove:   async (id)  => { if (!API_BASE) { localWrite(localRead().filter(x=>x.id!==id)); return; } await fetch(`${API_BASE}/processos/${id}`,{method:"DELETE"}); },
@@ -147,6 +189,64 @@ const parseCNJ   = s => { const c=s.replace(/\D/g,""); if(c.length!==20) return 
 const inferTrib  = cnj => { if(!cnj) return null; if(cnj.j==="8"&&cnj.tr==="20") return "TJRN"; if(cnj.j==="8"&&cnj.tr==="15") return "TJPB"; if(cnj.j==="5"&&cnj.tr==="21") return "TRT21"; if(cnj.j==="4"&&cnj.tr==="05") return "TRF5"; return null; };
 const prazoColor = p => { if(!p) return null; const d=Math.ceil((new Date(p)-new Date(todayStr))/86400000); if(d<0) return {bg:"#3B1515",txt:"#FCA5A5",brd:"#7F1D1D",label:`Vencido há ${Math.abs(d)}d`}; if(d<=1) return {bg:"#3B1515",txt:"#FCA5A5",brd:"#7F1D1D",label:d===0?"Vence hoje":"Amanhã"}; if(d<=3) return {bg:"#3B2A0A",txt:"#FCD34D",brd:"#78350F",label:`${d}d`}; if(d<=5) return {bg:"#2D2000",txt:"#FDE68A",brd:"#854F0B",label:`${d}d`}; return {bg:"#0A2010",txt:"#6EE7B7",brd:"#064E2A",label:`${d}d`}; };
 const totalPago  = pags => (pags||[]).reduce((s,p)=>s+(parseFloat(p.valor)||0),0);
+
+// ─── STATUS AUTOMÁTICO ───────────────────────────────────────────────────────
+// recebido = true quando o total pago cobre os honorários (e há honorários definidos)
+const isRecebido = c => {
+  const hon = parseFloat(c.honorarios)||0;
+  if (hon <= 0) return false;
+  return totalPago(c.pagamentos||[]) >= hon - 0.005;
+};
+// data_vencimento usa o campo novo, com fallback para prazo_laudo
+const getVencimento = c => c.data_vencimento || c.prazo_laudo || "";
+// Calcula status automático a partir do estado atual
+const computeStatus = c => {
+  if (isRecebido(c)) return "Recebido";
+  const venc = getVencimento(c);
+  if (!venc) return "Pendente";
+  const hoje = new Date(todayStr);
+  const d    = new Date(venc);
+  return d < hoje ? "Em atraso" : "Pendente";
+};
+// Cor associada ao status — semáforo vermelho/amarelo/verde
+const STATUS_COR = {
+  "Recebido":  { bg:"#0A2010", txt:"#6EE7B7", brd:"#064E2A" },
+  "Pendente":  { bg:"#1F1F1F", txt:"#9CA3AF", brd:"#3F3F46" },
+  "Em atraso": { bg:"#3B1515", txt:"#FCA5A5", brd:"#7F1D1D" },
+};
+// Cor de "proximidade" — amarelo se vence em até 5 dias
+const isProximoVenc = c => {
+  if (isRecebido(c)) return false;
+  const venc = getVencimento(c); if (!venc) return false;
+  const d = Math.ceil((new Date(venc) - new Date(todayStr))/86400000);
+  return d >= 0 && d <= 5;
+};
+// Ordenação inteligente: atrasados → próximos → resto por data crescente
+const sortByPrazo = arr => {
+  const peso = c => {
+    const st = computeStatus(c);
+    if (st === "Em atraso") return 0;
+    if (isProximoVenc(c))   return 1;
+    if (st === "Recebido")  return 3;
+    return 2;
+  };
+  return [...arr].sort((a,b)=>{
+    const pa=peso(a), pb=peso(b);
+    if (pa!==pb) return pa-pb;
+    const va=getVencimento(a), vb=getVencimento(b);
+    if (va&&vb) return new Date(va) - new Date(vb);
+    if (va) return -1;
+    if (vb) return  1;
+    return 0;
+  });
+};
+// Migração: garante data_vencimento preenchida em registros antigos
+const migrateCard = c => ({
+  ...c,
+  col: migrateCol(c.col),
+  status_pericial: migrateStatus(c.status_pericial),
+  data_vencimento: c.data_vencimento || c.prazo_laudo || "",
+});
 
 // ─── INFERÊNCIA AUTOMÁTICA DE COLUNA ─────────────────────────────────────────
 const inferColByText = texto => {
@@ -392,18 +492,29 @@ const usePrazoGcal = (gcalAuth) => {
 const KanbanCard = memo(({ card, onClick, onDragStart }) => {
   const ec=ETAPA_CORES[card.status_pericial]||{bg:"#1A1A1A",border:"#2A2A2A",badge:"#6B7280"};
   const tasks=card.tasks||[], hon=parseFloat(card.honorarios)||0, pend=hon-totalPago(card.pagamentos||[]);
-  const pfase=prazoColor(card.prazo_fase), plaudo=prazoColor(card.prazo_laudo);
+  const pfase=prazoColor(card.prazo_fase), plaudo=prazoColor(getVencimento(card));
   const worst=[pfase,plaudo].filter(Boolean).sort((a,b)=>{const r=c=>c.txt==="#FCA5A5"?0:c.txt==="#FCD34D"?1:c.txt==="#FDE68A"?2:3;return r(a)-r(b);})[0];
+  // Status automático + cor de borda dominante
+  const stAuto = computeStatus(card);
+  const stCor  = STATUS_COR[stAuto];
+  const proximo = isProximoVenc(card);
+  const borderCor = stAuto==="Em atraso" ? "#7F1D1D"
+                  : proximo               ? "#854F0B"
+                  : stAuto==="Recebido"   ? "#064E2A"
+                  : (worst?worst.brd:ec.border);
   return (
     <div draggable onDragStart={onDragStart} onClick={onClick}
-      style={{background:ec.bg,border:`1px solid ${worst?worst.brd:ec.border}`,borderRadius:9,padding:"9px 10px 8px",marginBottom:7,cursor:"grab",userSelect:"none"}}>
-      {worst&&<div style={{fontSize:10,background:worst.bg,color:worst.txt,borderRadius:4,padding:"2px 6px",marginBottom:5,display:"inline-block"}}>{worst.label}</div>}
+      style={{background:ec.bg,border:`1px solid ${borderCor}`,borderRadius:9,padding:"9px 10px 8px",marginBottom:7,cursor:"grab",userSelect:"none"}}>
+      <div style={{display:"flex",gap:4,marginBottom:5,flexWrap:"wrap"}}>
+        <span style={{fontSize:10,background:stCor.bg,color:stCor.txt,border:`1px solid ${stCor.brd}`,borderRadius:4,padding:"1px 6px"}}>{stAuto}</span>
+        {worst&&<span style={{fontSize:10,background:worst.bg,color:worst.txt,borderRadius:4,padding:"1px 6px"}}>{worst.label}</span>}
+      </div>
       <div style={{fontSize:13,fontWeight:600,color:"#E5E7EB",fontFamily:"monospace",letterSpacing:0.5,marginBottom:4}}>{card.processo||"—"}</div>
       <div style={{fontSize:12,fontWeight:500,color:"#E5E7EB",marginBottom:3}}>{card.tipo} · {card.tribunal}</div>
       {card.status_pericial&&<div style={{fontSize:10,background:ec.bg,color:ec.badge,border:`1px solid ${ec.border}`,borderRadius:4,padding:"1px 6px",display:"inline-block",marginBottom:4}}>{card.status_pericial}</div>}
       {card.fase&&<div style={{fontSize:10,color:"#60A5FA",marginBottom:3}}>{card.fase}</div>}
       {(card.autor||card.reu)&&<div style={{fontSize:10,color:"#6B7280",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginBottom:3}}>{[card.autor,card.reu].filter(Boolean).join(" × ")}</div>}
-      {card.prazo_laudo&&<div style={{fontSize:10,color:plaudo?.txt||"#6B7280",marginBottom:3}}>Laudo: {card.prazo_laudo}</div>}
+      {getVencimento(card)&&<div style={{fontSize:10,color:plaudo?.txt||"#6B7280",marginBottom:3}}>Vence: {getVencimento(card)}</div>}
       {tasks.length>0&&<div style={{fontSize:10,color:"#6B7280",marginBottom:4}}>✓ {tasks.filter(t=>t.done).length}/{tasks.length}{tasks.filter(t=>!t.done).length>0&&<span style={{color:"#FCD34D"}}> · {tasks.filter(t=>!t.done).length} pend.</span>}</div>}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:2}}>
         <span style={{fontSize:10,color:pend>0?"#FCD34D":hon>0?"#6EE7B7":"#4B5563"}}>{hon>0?(pend>0?`Pend: ${fmt(pend)}`:"Pago"):"Sem honorários"}</span>
@@ -546,6 +657,14 @@ const ModalForm = memo(({ form, onField, onSave, onDelete, onClose, saving, gcal
 
   const handleFaseChange=useCallback((val)=>{onField("fase",val);const col=inferColByText(val);if(col)onField("col",col);},[onField]);
 
+  // Trocar o badge de status manualmente também move o card de coluna.
+  // Mapeamento agora é 1:1, então sem casos especiais.
+  const handleStatusChange=useCallback((val)=>{
+    onField("status_pericial",val);
+    const novaCol = STATUS_TO_COL[val];
+    if (novaCol && novaCol !== form.col) onField("col", novaCol);
+  },[onField,form.col]);
+
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div style={{background:"#111",borderRadius:12,padding:"18px 20px",width:"min(580px,97vw)",maxHeight:"92vh",overflowY:"auto",border:"1px solid #2A2A2A"}}>
@@ -628,7 +747,7 @@ const ModalForm = memo(({ form, onField, onSave, onDelete, onClose, saving, gcal
           </div>
           <div style={s.g2}>
             <div style={s.row}><label style={s.lbl}>Fase</label><select value={form.fase} onChange={e=>handleFaseChange(e.target.value)} style={s.inp}>{FASES.map(o=><option key={o}>{o}</option>)}</select></div>
-            <div style={s.row}><label style={s.lbl}>Status pericial</label><select value={form.status_pericial} onChange={e=>onField("status_pericial",e.target.value)} style={s.inp}>{STATUS_LIST.map(o=><option key={o}>{o}</option>)}</select></div>
+            <div style={s.row}><label style={s.lbl}>Status pericial</label><select value={form.status_pericial} onChange={e=>handleStatusChange(e.target.value)} style={s.inp}>{STATUS_LIST.map(o=><option key={o}>{o}</option>)}</select></div>
           </div>
           <VaraField tribunal={form.tribunal} value={form.vara} onChange={v=>onField("vara",v)}/>
           <Field label="Próximo passo"       value={form.proximo}    onChange={v=>onField("proximo",v)}/>
@@ -651,6 +770,10 @@ const ModalForm = memo(({ form, onField, onSave, onDelete, onClose, saving, gcal
         {tab==="tarefas"&&<TarefasTab form={form} onChange={onField}/>}
 
         {tab==="prazos"&&<>
+          <div style={s.row}>
+            <Field label="Data de vencimento (prazo final do laudo)" value={form.data_vencimento||form.prazo_laudo} onChange={v=>{onField("data_vencimento",v);onField("prazo_laudo",v);}} type="date"/>
+            {(form.data_vencimento||form.prazo_laudo)&&(()=>{const c=prazoColor(form.data_vencimento||form.prazo_laudo);return c&&<div style={{fontSize:10,background:c.bg,color:c.txt,borderRadius:4,padding:"2px 7px",marginTop:-6,marginBottom:6,display:"inline-block"}}>{c.label}</div>;})()}
+          </div>
           <div style={s.g2}>
             <div>
               <Field label="Prazo da fase atual" value={form.prazo_fase}  onChange={handlePrazoFase}  type="date"/>
@@ -658,11 +781,29 @@ const ModalForm = memo(({ form, onField, onSave, onDelete, onClose, saving, gcal
               <GcalFeedback msg={gcalFeedbacks["prazo_fase"]?.msg} ok={gcalFeedbacks["prazo_fase"]?.ok}/>
             </div>
             <div>
-              <Field label="Prazo entrega laudo" value={form.prazo_laudo} onChange={handlePrazoLaudo} type="date"/>
+              <Field label="Prazo entrega laudo (Gcal)" value={form.prazo_laudo} onChange={handlePrazoLaudo} type="date"/>
               {form.prazo_laudo&&(()=>{const c=prazoColor(form.prazo_laudo);return c&&<div style={{fontSize:10,background:c.bg,color:c.txt,borderRadius:4,padding:"2px 7px",marginTop:-6,marginBottom:6,display:"inline-block"}}>{c.label}</div>;})()}
               <GcalFeedback msg={gcalFeedbacks["prazo_laudo"]?.msg} ok={gcalFeedbacks["prazo_laudo"]?.ok}/>
             </div>
           </div>
+
+          {/* ─── Datas das etapas (preenchimento automático) ───────────────────── */}
+          <div style={{background:"#161616",border:"1px solid #222",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+            <div style={{fontSize:11,color:"#6B7280",marginBottom:8}}>Histórico de etapas <span style={{color:"#4B5563"}}>(preenchido automaticamente ao mover o card)</span></div>
+            {[
+              ["Proposta enviada",  "data_proposta",         "#D97706"],
+              ["Início execução",   "data_inicio_execucao",  "#3B82F6"],
+              ["Conclusão do laudo","data_conclusao_laudo",  "#10B981"],
+            ].map(([l,k,c])=>(
+              <div key={k} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,marginBottom:6}}>
+                <span style={{width:8,height:8,borderRadius:"50%",background:c,display:"inline-block"}}/>
+                <span style={{color:"#9CA3AF",minWidth:130}}>{l}</span>
+                <input type="date" value={form[k]||""} onChange={e=>onField(k,e.target.value)} style={{...s.inp,flex:1,fontSize:11,padding:"4px 8px"}}/>
+                {form[k]&&<button onClick={()=>onField(k,"")} title="Limpar" style={{background:"none",border:"none",color:"#6B7280",cursor:"pointer",fontSize:12}}>✕</button>}
+              </div>
+            ))}
+          </div>
+
           {!gcalAuth&&<div style={{background:"#3B2A0A",border:"1px solid #78350F",borderRadius:6,padding:"8px 12px",marginBottom:10,fontSize:11,color:"#FCD34D"}}>⚠ Conecte sua conta Google para criar eventos automaticamente.</div>}
           <div style={{background:"#161616",border:"1px solid #1E3A5F",borderRadius:8,padding:"12px",marginBottom:10}}>
             <div style={{fontSize:12,fontWeight:500,color:"#93C5FD",marginBottom:8}}>Google Calendar</div>
@@ -718,6 +859,11 @@ export default function App() {
   const [dragOver,    setDragOver]    = useState(null);
   const [search,      setSearch]      = useState("");
   const [ftipo,       setFtipo]       = useState("");
+  // ─── NOVO: filtros inteligentes ───────────────────────────────────────────
+  const [ftrib,       setFtrib]       = useState("");
+  const [fstatus,     setFstatus]     = useState("");   // "Recebido" | "Pendente" | "Em atraso"
+  const [ffase,       setFfase]       = useState("");
+  const [frecebido,   setFrecebido]   = useState("");   // "" | "true" | "false"
   const [gcalAuth,    setGcalAuth]    = useState(null);
   const [gcalChecking,setGcalChecking]= useState(true);
 
@@ -763,17 +909,33 @@ export default function App() {
   const openNew  = useCallback(col=>{ setForm({...EMPTY,col,id:null,owner:perfil}); setModal(true); },[perfil]);
   const openEdit = useCallback(c  =>{ setForm({...EMPTY,...c,col:migrateCol(c.col),tasks:c.tasks||[],pagamentos:c.pagamentos||[]}); setModal(true); },[]);
 
+  // ─── Auto-registro de datas de etapa (NÃO sobrescreve datas já preenchidas) ─
+  // Chamado tanto no save() quanto no onDrop() — sempre que a coluna mudar.
+  const aplicarDatasEtapa = useCallback((card)=>{
+    const hoje = todayStr;
+    const out  = {...card};
+    // Sincroniza badge de status com a coluna (sempre sobrescreve).
+    if (COL_TO_STATUS[out.col]) out.status_pericial = COL_TO_STATUS[out.col];
+    if (out.col==="honorarios" && !out.data_proposta)        out.data_proposta        = hoje;
+    if (out.col==="execucao"   && !out.data_inicio_execucao) out.data_inicio_execucao = hoje;
+    if (out.col==="entregue"   && !out.data_conclusao_laudo) out.data_conclusao_laudo = hoje;
+    if (out.col==="finalizado" && !out.data_conclusao_laudo) out.data_conclusao_laudo = hoje;
+    // Mantém data_vencimento sincronizada com prazo_laudo
+    if (!out.data_vencimento && out.prazo_laudo) out.data_vencimento = out.prazo_laudo;
+    return out;
+  },[]);
+
   const save = useCallback(async()=>{
     if(!form.processo.trim()) return;
     setSaving(true);setErr(null);
     try {
-      const toSave={...form,owner:form.owner||perfil};
+      const toSave=aplicarDatasEtapa({...form,owner:form.owner||perfil});
       if(toSave.id){const u=await apiLayer.update(toSave);setCards(cs=>cs.map(c=>c.id===u.id?u:c));}
       else{const n=await apiLayer.create(toSave);setCards(cs=>[...cs,n]);}
       setModal(false);
     }catch(e){setErr(e.message);}
     setSaving(false);
-  },[form,perfil]);
+  },[form,perfil,aplicarDatasEtapa]);
 
   const del = useCallback(async(id)=>{
     if(!window.confirm("Excluir este processo?")) return;
@@ -785,11 +947,29 @@ export default function App() {
   const onDrop = useCallback(colId=>{
     if(!drag) return;
     const card=cards.find(c=>c.id===drag);
-    if(card&&card.col!==colId){setCards(cs=>cs.map(c=>c.id===drag?{...c,col:colId}:c));apiLayer.patchCol(drag,colId).catch(()=>load());}
+    if(card&&card.col!==colId){
+      const atualizado = aplicarDatasEtapa({...card,col:colId});
+      setCards(cs=>cs.map(c=>c.id===drag?atualizado:c));
+      // persiste tanto a coluna quanto eventuais datas registradas
+      apiLayer.update(atualizado).catch(()=>load());
+    }
     setDrag(null);setDragOver(null);
-  },[drag,cards,load]);
+  },[drag,cards,load,aplicarDatasEtapa]);
 
-  const filtered = useMemo(()=>cards.filter(c=>c.owner===perfil&&(!search||(c.processo+c.autor+c.reu+c.tipo).toLowerCase().includes(search.toLowerCase()))&&(!ftipo||c.tipo===ftipo)),[cards,search,ftipo,perfil]);
+  // ─── Filtros inteligentes (em tempo real, sem backend) ────────────────────
+  const filteredRaw = useMemo(()=>cards.filter(c=>{
+    if (c.owner!==perfil) return false;
+    if (search && !(c.processo+c.autor+c.reu+c.tipo).toLowerCase().includes(search.toLowerCase())) return false;
+    if (ftipo  && c.tipo!==ftipo)         return false;
+    if (ftrib  && c.tribunal!==ftrib)     return false;
+    if (ffase  && c.fase!==ffase)         return false;
+    if (fstatus && computeStatus(c)!==fstatus) return false;
+    if (frecebido==="true"  && !isRecebido(c)) return false;
+    if (frecebido==="false" && isRecebido(c))  return false;
+    return true;
+  }),[cards,search,ftipo,ftrib,ffase,fstatus,frecebido,perfil]);
+  // Aplica ordenação inteligente (atrasado → próximo → resto)
+  const filtered = useMemo(()=>sortByPrazo(filteredRaw),[filteredRaw]);
   const allPags  = useMemo(()=>cards.filter(c=>c.owner===perfil).flatMap(c=>c.pagamentos||[]),[cards,perfil]);
   const totalH   = useMemo(()=>cards.filter(c=>c.owner===perfil).reduce((s,c)=>s+(parseFloat(c.honorarios)||0),0),[cards,perfil]);
   const totalR   = useMemo(()=>totalPago(allPags),[allPags]);
@@ -847,7 +1027,24 @@ export default function App() {
       {err&&<div style={{background:"#3B1515",border:"1px solid #7F1D1D",borderRadius:6,padding:"6px 12px",marginBottom:8,fontSize:11,color:"#FCA5A5",display:"flex",justifyContent:"space-between"}}><span>⚠ {err}</span><button onClick={()=>setErr(null)} style={{background:"none",border:"none",color:"#FCA5A5",cursor:"pointer"}}>✕</button></div>}
 
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
-        {[{l:"Honorários",v:fmt(totalH)},{l:"Recebido",v:fmt(totalR),c:"#34D399",s:totalH?`${Math.round(totalR/totalH*100)}%`:""},{l:"A receber",v:fmt(totalH-totalR),c:totalH-totalR>0?"#FBBF24":"#34D399"},{l:"Semana",v:fmt(semana),c:"#60A5FA"},{l:"Mês",v:fmt(mes),c:"#60A5FA"},{l:"Ano",v:fmt(ano),c:"#60A5FA"},{l:"Processos",v:cards.filter(c=>c.owner===perfil).length,s:`${cards.filter(c=>c.owner===perfil&&c.col==="execucao").length} exec.`}].map(m=>(
+        {(()=>{
+          const meus = cards.filter(c=>c.owner===perfil);
+          const nAtraso   = meus.filter(c=>computeStatus(c)==="Em atraso").length;
+          const nPendente = meus.filter(c=>computeStatus(c)==="Pendente").length;
+          const nRecebido = meus.filter(c=>computeStatus(c)==="Recebido").length;
+          return [
+            {l:"Honorários",v:fmt(totalH)},
+            {l:"Recebido",v:fmt(totalR),c:"#34D399",s:totalH?`${Math.round(totalR/totalH*100)}%`:""},
+            {l:"A receber",v:fmt(totalH-totalR),c:totalH-totalR>0?"#FBBF24":"#34D399"},
+            {l:"Semana",v:fmt(semana),c:"#60A5FA"},
+            {l:"Mês",v:fmt(mes),c:"#60A5FA"},
+            {l:"Ano",v:fmt(ano),c:"#60A5FA"},
+            {l:"Em atraso",v:nAtraso,    c:nAtraso>0?"#FCA5A5":"#4B5563", s:nAtraso>0?"⚠ urgente":""},
+            {l:"Pendentes",v:nPendente,  c:"#FCD34D"},
+            {l:"Recebidos",v:nRecebido,  c:"#6EE7B7"},
+            {l:"Processos",v:meus.length,s:`${meus.filter(c=>c.col==="execucao").length} exec.`},
+          ];
+        })().map(m=>(
           <div key={m.l} style={{background:"#141414",border:"1px solid #1E1E1E",borderRadius:7,padding:"8px 12px",flex:"1 1 90px"}}>
             <div style={{fontSize:10,color:"#4B5563"}}>{m.l}</div>
             <div style={{fontSize:15,fontWeight:500,color:m.c||"#F3F4F6"}}>{m.v}</div>
@@ -877,7 +1074,15 @@ export default function App() {
 
       <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar processo, autor, réu…" style={{...s.inp,flex:"1 1 160px"}}/>
-        <select value={ftipo} onChange={e=>setFtipo(e.target.value)} style={{...s.inp,flex:"0 0 130px"}}><option value="">Todos os tipos</option>{TIPOS.map(t=><option key={t}>{t}</option>)}</select>
+        <select value={ftipo}     onChange={e=>setFtipo(e.target.value)}     style={{...s.inp,flex:"0 0 140px"}}><option value="">Todas categorias</option>{TIPOS.map(t=><option key={t}>{t}</option>)}</select>
+        <select value={ftrib}     onChange={e=>setFtrib(e.target.value)}     style={{...s.inp,flex:"0 0 110px"}}><option value="">Todos tribunais</option>{TRIBUNAIS.map(t=><option key={t}>{t}</option>)}</select>
+        <select value={ffase}     onChange={e=>setFfase(e.target.value)}     style={{...s.inp,flex:"0 0 130px"}}><option value="">Todas fases</option>{FASES.map(t=><option key={t}>{t}</option>)}</select>
+        <select value={fstatus}   onChange={e=>setFstatus(e.target.value)}   style={{...s.inp,flex:"0 0 120px"}}><option value="">Todos status</option><option value="Recebido">Recebido</option><option value="Pendente">Pendente</option><option value="Em atraso">Em atraso</option></select>
+        <select value={frecebido} onChange={e=>setFrecebido(e.target.value)} style={{...s.inp,flex:"0 0 110px"}}><option value="">Recebido (todos)</option><option value="true">Recebido = sim</option><option value="false">Recebido = não</option></select>
+        {(search||ftipo||ftrib||ffase||fstatus||frecebido)&&(
+          <button onClick={()=>{setSearch("");setFtipo("");setFtrib("");setFfase("");setFstatus("");setFrecebido("");}}
+            style={{...s.btn("#3B1515","#FCA5A5","#7F1D1D"),fontSize:11}}>Limpar filtros</button>
+        )}
       </div>
 
       {loading?<div style={{textAlign:"center",padding:"40px 0",color:"#374151"}}>Carregando…</div>:(
